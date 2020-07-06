@@ -1,0 +1,321 @@
+---
+title: "İstatistiksel YazılımlarII"
+author: "Buse Rüsveli-Berfin Nur Temur-İrem Yılmaz"
+date: "05 07 2020"
+output: html_document
+---
+
+**_IMAGE CLASSIFICATION(GORUNTU SINIFLANDIRMA)_**
+
+- Image Classification Nedir?
+Nesne tanıma,askeri,sanayi,kriminal laboratuvarlar gibi pek cok alanda kullanılmaktadır.Ozellikle de tıp alanında hastalıkların teshisi için tıbbi görüntüleme yöntemleri ile ic organların,kasların,kemiklerin cesitli yontemlerle goruntulenmesi yapılır. 
+
+Bizim yapacagımız calısma;Rakam tanıma modeli kurma.
+Verimizi Kaggle'dan cektik.
+
+
+İlk olarak kullacagımız paketleri indirelim.
+```{r message=FALSE}
+library(dplyr) # dplyr paketi, gruplar arası farklar, değişken gruplamaları, yeni değişkenler oluşturma ve benzeri işlemleri gerçekleştirerek bu gizli bilginin açığa çıkması için kullanılan R paketlerinden biridir.
+library(keras) #Keras, Theano veya Tensorflow’u backend olarak kullanan bir wrapper. Python dilini kullanıyor. Modellerı tanımlamayı ve eğitmeyi çok kolay hale getiriyor.
+library(tictoc) #Bu paket 'tic' ve 'toc' zamanlama fonksiyonlarını sağlar. Karmaşık bir komut dosyası varken tüm zamanlamaları kaydedebilir.
+library(readr) #'Readr' foksiyonu hedefi hızlı ve kolay bir okuma yolu sağlamaktadır.
+library(tensorflow) #Açık kaynak kodlu bir deep learning(derin öğrenme) kütüphanesidir. Esnek yapısı sayesinde, tek bir API ile platform farketmeksizin hesaplamaları, bir veya birden fazla CPU, GPU kullanarak deploy etmenize olanak sağlar. 
+library(graphics) #Grafikler icin kullanılan pakettir.
+```
+
+```{r message=FALSE}
+install_tensorflow(
+  method = c("auto", "virtualenv", "conda"),
+  conda = "auto",
+  version = "default",
+  envname = NULL,
+  extra_packages = NULL,
+  restart_session = TRUE,
+  conda_python_version = "3.6",
+  
+)
+```
+
+Test ve train olarak verilerimizi olusturalım.
+```{r message=FALSE}
+digits.test<- read.csv("Downloads/test.csv")
+digits.train <- read.csv("Downloads/train.csv")
+```
+
+**_1.Veriyi Kesfetme_**
+
+Kurdugumuz train verisini inceleyelim.
+```{r message=FALSE}
+options(repr.plot.width=4,repr.plot.height=2)
+par(mar=c(2,2,2,2))
+digits.train[,1] %>% 
+    table() %>% 
+    barplot(col=rainbow(10,start=.1,end=.4))
+```
+
+
+Veri acıklamasından, egitilmis verilerinin formatının ne olacagını biliyoruz.İsleri kolaylastırmak icin piksel verilerini [0,1] olarak olceklemeliyiz, ardından neyle ugrastıgımızı gormek icin birkac resmi hızlıca goruntulemeliyiz. Her bir etiketin ilk 12 goruntusunu gorsel olarak inceleyelim.
+
+Piksel verilerini olceklendirme;
+```{r message=FALSE}
+pixels.train <- digits.train[,-1]/255
+pixels.test <- digits.test/255
+```
+
+Olceklendirilmis train verisi;
+```{r message=FALSE}
+train.scaled <- cbind('label' = digits.train$label,
+                      pixels.train)
+```
+
+10x12 goruntusu matrisi ile goruntuleme yapalım.
+```{r message=FALSE}
+par(mfrow=c(10, 12), pty='s', mai=c(0.2, 0, 0, 0.1))
+
+for (lab in 0:9) {
+  samp <- train.scaled %>%
+    filter(label == lab)
+  for (i in 1:12) {
+    img <- matrix(as.numeric(samp[i, -1]), 28, 28, byrow = TRUE)
+    image(t(img)[,28:1], axes = FALSE, col = grey(seq(1, 0, length = 256)))
+    box(lty = 'solid')
+  }
+}
+```
+
+
+Yukarıdaki goruntulere bakıldıgı zaman aynı basamagın görüntüleri arasında onemli farklılıklar vardır. 
+ *Rakamlar, ozellikle bir rakamda gorulebilen farklı egim acılarına sahiptir.
+ *Farklı yazı stilleri goruyoruz.Ornegin 2 ve 7 gibi.
+ *"Kotu" el yazısı sınıflandırma algoritmamızda ele almamız gereken bir sorun olabilir. Tanınmayan birkac basamak var.
+ *Bazı rakamlar digerlerinden daha soluktur. Bazıları "daha kalın".
+ 
+ 
+Bazı sorunlar olsa da, verilerin genellikle "iyi kalitede" oldugunu da fark ediyoruz.Rakamlar "dogru" yazılır; ornegin geriye dogru yazılan rakam yok.Son olarak, yazılı rakamların genellikle yatay olarak ortalandıgını goruyoruz.
+
+
+Ilginc bir sey olup olmadıgını gormek icin her goruntunun ortalamasına bakalım.
+```{r message=FALSE}
+par(mfrow=c(2, 5), pty='s', mai=c(0, 0, 0, 0))
+
+for (lab in 0:9) {
+  subs <- train.scaled %>%
+    filter(label == lab)
+  avg <- colMeans(subs)
+  img <- matrix(avg[2:length(avg)], 28, 28, byrow = TRUE)
+  image(t(img)[,28:1], axes = FALSE, col = grey(seq(1, 0, length = 256)))
+  box(lty = 'solid')
+}
+
+```
+
+
+Cıktıya gore rakamların genellikle ortalandıgını ve cevrilmedigini dogrular. En onemlisi aynı basamagın goruntuleri aynı genel ozelliklere sahiptir. Son olarak, bunlar bize verileri artırmak icin kullanabilecegimiz bir rehber verir.(ne kadar dondurulecegi, kaydırılacagı vb).
+
+
+**_2.Basit Sinir Ağı_**
+
+
+Aynı basamaktaki goruntuler benzer ozelliklere sahip gibi gorundugunden, basit bir sinir agı belirli duzeyde iyi performans gostermelidir.Bunu TensorFlow/ Keras kutuphanesini kullanarak test edecegiz.
+
+Ilk olarak, verilerimizi test, validation ve train alt kumelerine ayırmamız gerekiyor.Bunun icin, 1000 resimden olusan bir test seti ve toplam veri setinin % 10 'unu dogrulama seti olarak; geri kalanı egitim seti olarak kullanacagız.
+
+```{r message=FALSE}
+test_size <- 1000
+val_size <- .1 * nrow(digits.train)
+
+pixels <- (digits.train[, -1]/255) %>%
+    split(rep(c('test', 'val', 'train'), 
+              c(test_size, val_size, nrow(digits.train) - test_size - val_size))) %>%
+    sapply(as.matrix)
+```
+
+
+Aynı seyi "labels" icin yapacagız.
+
+```{r message=FALSE}
+labels <- digits.train[, 1] %>%
+    split(rep(c('test', 'val', 'train'), 
+            c(test_size, val_size, nrow(digits.train) - test_size - val_size))) %>%
+    sapply(to_categorical, 10)
+```
+
+
+Son olarak sinir agını kurmaya hazırız.Burada, tek bir 28 dugumlu gizli katmana sahip, tamamen baglı bir cok katmanlı algılayıcıdır.Cıktı katmanı 10 dugumdur.
+
+```{r message=FALSE}
+NN <- keras_model_sequential()
+NN %>%
+    layer_dense(units = 128, activation = "relu", input_shape = c(784)) %>%
+    layer_dense(units = 10, activation = "softmax") 
+    
+NN %>%
+    compile(loss = "categorical_crossentropy", optimizer = "adam", metrics = "accuracy")
+```
+
+
+Simdi de yukarıdaki modeli egitelim.
+```{r message=FALSE}
+tic.clear()
+tic("Fitting Model")
+history <- NN %>% 
+    fit(pixels$train, labels$train, 
+        epochs = 30, 
+        validation_data = list(pixels$val, labels$val),
+        batch_size = 64, 
+        verbose = 2)
+toc()
+```
+
+Kayıp ve dogruluk egrilerini inceleyerek bu modeli gorsel olarak degerlendirelim.
+
+```{r message=FALSE}
+plot(history)
+```
+
+Yaklasık 10 devirin ardından, validasyon kaybı artmaya ve validasyon doğrulugunun platoya baslamasıyla performansın düsmeye basladığını gorebiliriz.
+
+
+Yanlıs tahminleri inceleyelim.
+```{r message=FALSE}
+labels$pred <- NN %>% predict_classes(pixels$test, batch_size = 64 )
+
+wrong <- which(labels$pred != max.col(labels$test) - 1)
+
+par(mfrow=c(3, 5), pty='s', mai = c(0, 0, 0, 0))
+for (i in wrong[1:15]) {
+  img <- matrix(pixels$test[i, ], 28, 28, byrow = TRUE)
+  image(t(img)[,28:1], axes = FALSE, col = grey(seq(1, 0, length = 256)))
+  box(lty = 'solid')
+  text(x = 0, y = .95,
+       labels = sprintf("label: %d  predicted: %d", 
+                        max.col(labels$test)[i] - 1, 
+                        labels$pred[i]),
+       pos = 4,
+       col = 'red')
+  title(sprintf("image %d", i), line = 0.3)
+}
+```
+
+
+Ilk olarak,bizim bile goruntuyu dogru bir sekilde sınıflandıramayabilecegi degisik el yazısı sorunu var.Bizim ilgilendiklerimiz, genel olarak net olan ve ongorunun kapalı oldugu goruntulerdir.Modelimiz 4 ve 9'ları ayırt etmekte zorlanıyor gibi gorunuyor.
+Bunun gibi sorunlar, modelimiz goruntu pikseline piksel baktıgından ortaya cıkar.Yapmamız gereken egriler ve kenarlar gibi ozellik kumeleri olusturmak icin bir piksel grubuna bakmaktır.Bunun için bir evrisimsel sinir agı kullanacagız.
+
+**_3.Evrisimsel Sini Agı(Convolution Neural Network)_**
+
+Evrisimsel Sinir Agı icin;
+  1.Ilk ikisi 32 filtreli ve 3 × 3 cekirdek boyutlu convolution katmanlarıdır.
+  2.A Max Pooling layer.
+  3.Asırı sıgmayı onlemek icin 0.25 damla hızında bir drop layer.
+  4.64 filtreden ve 3 × 3 cekirdek boyutundan 2 convolution layers daha.
+  5.A Max Pooling layer.
+  6.Another drop layer with 0.25 drop rate.
+  7.Girisi yogun katmana hazırlamak icin duzlestirme.
+  8.128 dugumlu geleneksel bir dense layer.
+  9.One last drop layer with 0.50 drop rate.
+  10.Sonunda output layer.
+  
+
+
+Ilk olarak, veriler [1 × 784] vektor formunda geldiginden, verileri 28 × 28 piksel gri tonlamalı bir goruntuye benzeyecek sekilde yeniden sekillendirilmeli.
+
+```{r message=FALSE}
+dim(pixels$train) <- c(nrow(pixels$train), 28, 28, 1)
+dim(pixels$val) <- c(nrow(pixels$val), 28, 28, 1)
+dim(pixels$test) <- c(nrow(pixels$test), 28, 28, 1)
+```
+
+Yukarıda acıklanan modeli olusturmaya hazırız.
+```{r message=FALSE}
+CNN <- keras_model_sequential()
+
+CNN %>%
+    layer_conv_2d(filters = 32, kernel_size = 3, activation = "relu", input_shape = c(28, 28, 1)) %>%
+    layer_conv_2d(filters = 32, kernel_size = 3, activation = "relu") %>%
+    layer_max_pooling_2d() %>%
+    layer_dropout(rate = 0.25) %>%
+    layer_conv_2d(filters = 64, kernel_size = 3, activation = "relu") %>%
+    layer_conv_2d(filters = 64, kernel_size = 3, activation = "relu") %>%
+    layer_max_pooling_2d() %>%
+    layer_dropout(rate = 0.25) %>%
+    layer_flatten() %>%
+    layer_dense(units = 128, activation = "relu") %>%
+    layer_dropout(rate = 0.50) %>%
+    layer_dense(units = 10, activation = "softmax")
+    
+CNN %>%
+    compile(loss = "categorical_crossentropy", optimizer = "adam", metrics = "accuracy")
+```
+
+Drop layers yanı sıra, egitim setindekilere benzer goruntuler olusturarak da verileri artırabiliriz.Bu sadece bize daha fazla egitim verisi saglamakla kalmaz, aynı zamanda modelin hic görmedigi verileri sunarak asırı sıgmayı onlemeye yardımcı olur.
+Neyse ki Keras kutuphanesi bunu gercekten kolaylastırıyor.
+
+
+Veri ureteci islevi, cevirme gibi buyutme icin daha fazla yol sunar, ancak goruntuyu tamamen değistirmek istemiyoruz; ornegin, 9'u cevirmek onu 6'ya cevirebilir.
+
+```{r message=FALSE}
+img_gen <- image_data_generator(rotation_range = 30, 
+                                width_shift_range = 0.15, 
+                                height_shift_range = 0.15,
+                                zoom_range = 0.05)
+```
+
+
+Bu modeli egitelim. fit_generator (...) kodu, egitim islemi sırasında veri kumesini genisletmemizi saglar.
+
+```{r message=FALSE}
+tic("Fitting Model with Augmented Data")
+history <- CNN %>%
+    fit_generator(flow_images_from_data(pixels$train, labels$train, 
+                                        generator = img_gen,
+                                        batch_size = 64),
+                    steps_per_epoch = floor(nrow(pixels$train)/64),
+                    epochs = 30,
+                    validation_data = list(pixels$val, labels$val),
+                    verbose = 2)
+toc()
+```
+
+```{r message=FALSE}
+plot(history)
+```
+
+
+Bu modeli gelistirmek icin, ogrenme hızını ayarlamak veya mimariyi değistirmek gibi yapabileceğimiz çok şey var.Bu modelin neyi yanlıs yaptığına bakalım.
+
+```{r message=FALSE}
+labels$pred <- CNN %>% predict_classes(pixels$test, batch_size = 64 )
+
+wrong <- which(labels$pred != max.col(labels$test) - 1)
+
+par(mfrow=c(3, 6), pty='s', mai=c(0,0,0,0))
+for (i in wrong) {
+  img <- matrix(pixels$test[i, , ,], 28, 28, byrow = TRUE)
+  image(t(img)[,28:1], axes = FALSE, col = grey(seq(1, 0, length = 256)))
+  box(lty = 'solid')
+  text(x = 0, y = .95,
+       labels = sprintf("label: %d  predicted: %d", 
+                        max.col(labels$test)[i] - 1, 
+                        labels$pred[i]),
+       pos = 4,
+       col = 'red')
+  title(sprintf("image %d", i), line = 0.3)
+}
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
